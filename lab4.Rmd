@@ -1,0 +1,140 @@
+---
+title: "Lab4"
+author: "Rae Fuhrman"
+date: "1/31/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(tidyverse)
+library(Ecdat)
+library(plm)
+library(lmtest)
+library(car)
+
+```
+
+Part 1. Non linear least squares (logistic growth of bacteria)
+
+```{r}
+
+CellGrowth <- read_csv("CellGrowth.csv")
+
+ggplot(CellGrowth, aes(x=Time, y=CellCount))+
+  geom_point()
+
+#find estimates for logistic growth
+#N = A/(1+Be^(-rt))
+#OK, now if N0 is 2000 (from graph), what is B?
+
+Bestimate <- (3700-2000/2000) #B=~.85
+
+#now let's estimate r the growth rate
+
+lag_phase <- CellGrowth %>% 
+  filter(Time < 5)
+
+#relationship between natural log and time should be linear
+ggplot(lag_phase, aes(x=Time, y=log(CellCount)))+
+  geom_point()
+#looks pretty linear which means yes it was probably close to an exponential relationship
+
+lm(log(CellCount) ~ Time, data = lag_phase) #r=0.1035 
+
+```
+
+Find model A, B, and r using Gauss-Newton method for iterative convergence (nonlinear least squares):
+
+Use the nls() function:
+
+```{r}
+
+cell_fit <- nls(CellCount ~ A/(1+B*exp(-r*Time)),
+                start = list(A = 3700, B = 0.85, r = 0.1035),
+                data = CellGrowth,
+                trace = TRUE) #exp() is e raised to something, trace = true gives all convergence values
+
+cell_fit
+
+A <- coef(cell_fit)[1]  # will automatically update if model is updates 
+B <- coef(cell_fit)[2]
+r <- coef(cell_fit)[3]
+
+#create a new sequence of time values (time_seq)
+time_seq <- seq(0,20,length = 100)
+
+#plug that new sequence into my model with the paramters A,B,r 
+cell_pred <- A/(1+B*exp(-r*time_seq))
+
+#bind that together with the time sequence data using data.frame to create a predicted data frame
+pred_df <- data.frame(time_seq, cell_pred) #combine for plotting
+
+ggplot(CellGrowth, aes(x = Time, y = CellCount)) + 
+  geom_point(colour = "blue", size = 3) + 
+  theme_bw() +
+  geom_line(data = pred_df, aes(x = time_seq, y = cell_pred), colour = "orange", size = 1) + 
+  xlab("Time (h)") +
+  ylab("Cell Count") +
+  ggtitle("Bacterial Growth")
+
+```
+
+Panel Regression - First Shot
+
+State: our entity variable
+Year: our time variable
+packpc: our DV
+avgprs: our predictor variable
+
+
+```{r}
+
+cigs_panel <- Cigarette %>% 
+  select(state, year, packpc, avgprs)
+
+ggplot(cigs_panel, aes(x=avgprs, y=packpc, group=state))+
+  geom_point(aes(color=state))+
+  geom_smooth(method="lm", aes(color=state), se=FALSE, size=0.2)
+
+ggplot(cigs_panel, aes(x=year, y=packpc, group = state))+
+  geom_point(aes(color=state))+
+  geom_smooth(method="lm", aes(color=state), size=0.3, se=FALSE)
+
+```
+
+Entity fixed effects model:
+
+```{r}
+
+cigs_model <- plm(packpc ~ avgprs,
+                  data=cigs_panel,
+                  index = c("state", "year"),
+                  model = "within")
+cigs_model
+
+coeftest(cigs_model, vcov.=vcovHC(cigs_model, type = "HC1"))
+
+```
+```{r}
+
+et_cigs_model <- plm(packpc ~ avgprs,
+                data = cigs_panel,
+                index = c("state","year"),
+                model = "within",
+                effect = "twoways")
+
+et_cigs_model
+
+coeftest(et_cigs_model, vcov. = vcovHC(et_cigs_model, type = "HC1")) #coefficient is still highly significant, but is a different value
+
+pFtest(et_cigs_model,cigs_model) #must give more complete model first, time complete in this case
+
+```
+
+**Conclusion:** Yes, we should include time fixed effects.  This makes sense, because we know that cigarette use is decreasing universally over time due to so many factors - health, societal pressure, etc.  We would expect time to substantially influence the number of packs per person.
+
